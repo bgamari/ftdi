@@ -233,6 +233,7 @@ writeBytes edge order bs
     opCode o *> word16 (fromIntegral $ BS.length bs) *> writeByteString bs
   where
     o = 0x10 .|. bitOrderBit order .|. outEdgeBit edge
+{-# INLINE writeBytes #-}
 
 readBytes :: ClockEdge -> BitOrder -> Word16 -> Command BS.ByteString
 readBytes edge order n
@@ -241,6 +242,7 @@ readBytes edge order n
     opCode o *> word16 n *> readN (fromIntegral n)
   where
     o = 0x20 .|. bitOrderBit order .|. inEdgeBit edge
+{-# INLINE readBytes #-}
 
 readWriteBytes :: ClockEdge  -- ^ which edge to clock *out* data on
                -> BitOrder -> BS.ByteString -> Command BS.ByteString
@@ -250,3 +252,4 @@ readWriteBytes outEdge order bs
     opCode o *> word16 (fromIntegral $ BS.length bs) *> transfer (BSB.byteString bs) (BS.length bs)
   where
     o = 0x30 .|. bitOrderBit order .|. inEdgeBit (otherEdge outEdge) .|. outEdgeBit outEdge
+{-# INLINE readWriteBytes #-}
