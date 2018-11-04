@@ -66,7 +66,11 @@ instance Applicative Command where
     pure x = Command mempty 0 (const x)
     {-# INLINE pure #-}
     Command a b c <*> Command a' b' c' =
-        Command (a <> a') (b + b') (c <*> c')
+        Command (a <> a') (b + b') parse
+      where
+        parse bs =
+            let (bs1, bs2) = BS.splitAt b bs
+            in (c bs1) (c' bs2)
     {-# INLINE (<*>) #-}
 
 opCode :: Word8 -> Command ()
@@ -82,7 +86,9 @@ word16 o = () <$ transfer (BSB.word16BE o) 0
 {-# INLINE word16 #-}
 
 transfer :: BSB.Builder -> Int -> Command BS.ByteString
-transfer b n = Command { command = b, expectedBytes = n, parseBytes = id }
+transfer b n = Command { command = b
+                       , expectedBytes = n
+                       , parseBytes = id }
 {-# INLINE transfer #-}
 
 writeByteString :: BS.ByteString -> Command ()
