@@ -16,7 +16,7 @@ import Data.List                 ( foldr )
 import Data.Ord                  ( Ord, min, max )
 import Prelude                   ( Enum, Bounded, minBound, maxBound
                                  , Num, (+), Integral
-                                 , fromEnum, fromInteger, fromIntegral
+                                 , fromEnum, fromIntegral
                                  , divMod
                                  )
 
@@ -34,10 +34,10 @@ import Data.Function.Unicode     ( (∘) )
 genFromEnum ∷ (Enum e, Num n) ⇒ e → n
 genFromEnum = fromIntegral ∘ fromEnum
 
-orBits ∷ Bits α ⇒ [α] → α
+orBits ∷ (Num α, Bits α) ⇒ [α] → α
 orBits = foldr (.|.) 0
 
-andBits ∷ Bits α ⇒ [α] → α
+andBits ∷ (Num α, Bits α) ⇒ [α] → α
 andBits = foldr (.&.) $ complement 0
 
 clamp ∷ (Bounded α, Ord α) ⇒ α → α

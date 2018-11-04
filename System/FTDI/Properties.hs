@@ -37,8 +37,7 @@ import System.FTDI.Internal  ( marshalModemStatus
 
 -- QuickCheck
 import Test.QuickCheck       ( Arbitrary, arbitrary, shrink, choose
-                             , arbitraryBoundedIntegral
-                             , shrinkIntegral, frequency
+                             , frequency
                              )
 
 -- random
@@ -86,10 +85,6 @@ isIdentityWith eq = liftA2 eq id
 -------------------------------------------------------------------------------
 -- Arbitrary instances
 -------------------------------------------------------------------------------
-
-instance Arbitrary Word8 where
-    arbitrary = arbitraryBoundedIntegral
-    shrink    = shrinkIntegral
 
 deriving instance Random α ⇒ Random (BaudRate α)
 

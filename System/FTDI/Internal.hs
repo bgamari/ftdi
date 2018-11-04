@@ -18,23 +18,20 @@ module System.FTDI.Internal where
 import Control.Applicative       ( Applicative, (<$>), Alternative )
 import Control.Exception         ( Exception, bracket, throwIO )
 import Control.Monad             ( Functor
-                                 , Monad, (>>=), (>>), (=<<), return, fail
+                                 , Monad, (>>=), (>>), (=<<), return
                                  , liftM
                                  , MonadPlus
                                  )
 import Control.Monad.Fix         ( MonadFix )
-import Data.Bool                 ( Bool, otherwise )
-#ifdef __HADDOCK__
-import Data.Bool                 ( Bool(False, True) )
-#endif
-import Data.Bits                 ( Bits, (.|.)
+import Data.Bool
+import Data.Bits                 ( (.|.)
                                  , setBit, shiftL, shiftR, testBit
                                  )
 import Data.Data                 ( Data )
-import Data.Eq                   ( Eq, (==) )
+import Data.Eq                   ( Eq )
 import Data.Function             ( ($), on )
 import Data.Int                  ( Int )
-import Data.List                 ( foldr, head, minimumBy, partition, zip )
+import Data.List                 ( foldr, minimumBy, zip )
 import Data.Maybe                ( Maybe(Just, Nothing), maybe )
 import Data.Ord                  ( Ord, (<), (>), compare )
 import Data.Tuple                ( fst, snd )
@@ -45,7 +42,7 @@ import Prelude                   ( Enum, succ
                                  , Num, (+), (-), Integral, (^)
                                  , Fractional, Real, RealFrac
                                  , Double, Integer
-                                 , fromEnum, fromInteger, fromIntegral
+                                 , fromEnum, fromIntegral
                                  , realToFrac, floor, ceiling
                                  , div, error
                                  )
@@ -68,8 +65,8 @@ import Data.ByteString           ( ByteString )
 -- from ftdi:
 import System.FTDI.Utils         ( divRndUp, clamp, genFromEnum, orBits )
 
--- from safe:
-import Safe                      ( atMay, headMay )
+-- from vector:
+import qualified Data.Vector as V
 
 -- from transformers:
 import Control.Monad.Trans.State ( StateT, get, put, runStateT )
@@ -190,12 +187,13 @@ setChipType dev ct = dev {devChipType = ct}
 -- random USB device is an actual FTDI device.
 fromUSBDevice ∷ USB.Device -- ^ USB device
               → ChipType
-              → Device     -- ^ FTDI device
-fromUSBDevice dev chip =
-  Device { devUSB      = dev
-         , devUSBConf  = head ∘ USB.deviceConfigs $ USB.deviceDesc dev
-         , devChipType = chip
-         }
+              → IO Device     -- ^ FTDI device
+fromUSBDevice dev chip = do
+  config <- USB.getConfigDesc dev 0
+  return Device { devUSB      = dev
+                , devUSBConf  = config
+                , devChipType = chip
+                }
 
 -- |Tries to guess the type of the FTDI chip by looking at the USB
 -- device release number of a device's descriptor. Each FTDI chip uses
@@ -203,7 +201,7 @@ fromUSBDevice dev chip =
 guessChipType ∷ USB.DeviceDesc → Maybe ChipType
 guessChipType desc = case USB.deviceReleaseNumber desc of
                        -- Workaround for bug in BM type chips
-                       (0,2,0,0) | USB.deviceSerialNumberStrIx desc ≡ 0
+                       (0,2,0,0) | USB.deviceSerialNumberStrIx desc ≡ Just 0
                                              → Just ChipType_BM
                                  | otherwise → Just ChipType_AM
                        (0,4,0,0) → Just ChipType_BM
@@ -272,7 +270,7 @@ setTimeout devHnd timeout = devHnd {devHndTimeout = timeout}
 openDevice ∷ Device → IO DeviceHandle
 openDevice dev = do
   handle ← USB.openDevice $ devUSB dev
-  USB.setConfig handle $ USB.configValue $ devUSBConf dev
+  USB.setConfig handle $ Just $ USB.configValue $ devUSBConf dev
   return DeviceHandle { devHndUSB     = handle
                       , devHndDev     = dev
                       , devHndTimeout = defaultTimeout
@@ -309,12 +307,13 @@ openInterface ∷ DeviceHandle → Interface → IO InterfaceHandle
 openInterface devHnd i =
     let conf    = devUSBConf $ devHndDev devHnd
         ifIx    = fromEnum i
-        mIfDesc = headMay =<< USB.configInterfaces conf `atMay` ifIx
-        mInOutEps = partition ((USB.In ≡) ∘ USB.transferDirection ∘ USB.endpointAddress)
+        mIfDesc = (USB.configInterfaces conf V.!? ifIx) >>= headMay
+        mInOutEps = V.partition ((USB.In ≡) ∘ USB.transferDirection ∘ USB.endpointAddress)
                     ∘ USB.interfaceEndpoints
                     <$> mIfDesc
         mInEp   = headMay ∘ fst =<< mInOutEps
         mOutEp  = headMay ∘ snd =<< mInOutEps
+        headMay = (V.!? 0)
     in maybe (throwIO InterfaceNotFound)
              ( \ifHnd → do USB.claimInterface (devHndUSB devHnd) (interfaceToUSB i)
                            return ifHnd
@@ -510,7 +509,7 @@ readData ifHnd checkStop numBytes = ChunkedReaderT $
 -- which indicates whether a timeout occured during the request.
 readBulk ∷ InterfaceHandle
          → Int -- ^Number of bytes to read
-         → IO (ByteString, Bool)
+         → IO (ByteString, USB.Status)
 readBulk ifHnd numBytes =
     USB.readBulk (devHndUSB $ ifHndDevHnd ifHnd)
                  (interfaceEndPointIn $ ifHndInterface ifHnd)
@@ -523,12 +522,12 @@ readBulk ifHnd numBytes =
 -- whether a timeout occured during the request.
 writeBulk ∷ InterfaceHandle
           → ByteString -- ^Data to be written
-          → IO (Int, Bool)
+          → IO (Int, USB.Status)
 writeBulk ifHnd bs =
     USB.writeBulk (devHndUSB $ ifHndDevHnd ifHnd)
                   (interfaceEndPointOut $ ifHndInterface ifHnd)
-                  (devHndTimeout $ ifHndDevHnd ifHnd)
                   bs
+                  (devHndTimeout $ ifHndDevHnd ifHnd)
 
 -------------------------------------------------------------------------------
 -- Control Requests
@@ -536,40 +535,37 @@ writeBulk ifHnd bs =
 
 -- |The type of a USB control request.
 type USBControl α = USB.DeviceHandle
-                  → USB.RequestType
-                  → USB.Recipient
-                  → RequestCode
-                  → RequestValue
-                  → Word16
+                  → USB.ControlSetup
                   → USB.Timeout
                   → α
 
 -- |Generic FTDI control request with explicit index
 genControl ∷ USBControl α
-           → Word16 -- ^Index
+           → USB.Index -- ^Index
            → InterfaceHandle
            → RequestCode
            → RequestValue
            → α
 genControl usbCtrl index ifHnd request value =
-    usbCtrl usbHnd
-            USB.Vendor
-            USB.ToDevice
-            request
-            value
-            (index .|. (interfaceIndex $ ifHndInterface ifHnd))
-            (devHndTimeout devHnd)
+    usbCtrl usbHnd setup (devHndTimeout devHnd)
     where devHnd = ifHndDevHnd ifHnd
           usbHnd = devHndUSB devHnd
+          index' = index .|. (interfaceIndex $ ifHndInterface ifHnd)
+          setup  = USB.ControlSetup { USB.controlSetupRequestType = USB.Vendor
+                                    , USB.controlSetupRecipient   = USB.ToDevice
+                                    , USB.controlSetupRequest     = request
+                                    , USB.controlSetupValue       = value
+                                    , USB.controlSetupIndex       = index'
+                                    }
 
-control ∷ InterfaceHandle → RequestCode → Word16 → IO ()
+control ∷ InterfaceHandle → RequestCode → USB.Value → IO ()
 control = genControl USB.control 0
 
-readControl ∷ InterfaceHandle → RequestCode → Word16 → USB.Size → IO (ByteString, Bool)
+readControl ∷ InterfaceHandle → RequestCode → USB.Value → USB.Size → IO (ByteString, USB.Status)
 readControl = genControl USB.readControl 0
 
-writeControl ∷ InterfaceHandle → RequestCode → Word16 → ByteString → IO (USB.Size, Bool)
-writeControl = genControl USB.writeControl 0
+writeControl ∷ InterfaceHandle → RequestCode → USB.Value → ByteString → IO (USB.Size, USB.Status)
+writeControl = genControl (\hdl setup timeout bs -> USB.writeControl hdl setup bs timeout) 0
 
 -------------------------------------------------------------------------------
 
@@ -932,7 +928,7 @@ calcBaudRateDivisors chip baudRate =
       chipSubDivisors _           = [0..7]
 
 -- |Calculates the baud rate from a divisor and a subdivisor.
-calcBaudRate ∷ Fractional α ⇒ BRDiv Int → BRSubDiv α → BaudRate α
+calcBaudRate ∷ (Eq α, Fractional α) ⇒ BRDiv Int → BRSubDiv α → BaudRate α
 calcBaudRate 0 0 = maxBound
 calcBaudRate 1 0 = 2000000
 calcBaudRate d s = maxBound ÷ BaudRate (realToFrac d + unBRSubDiv s)
