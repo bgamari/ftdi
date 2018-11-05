@@ -41,6 +41,7 @@ module System.FTDI.MPSSE
     , setGpioDirValue
     ) where
 
+import Control.Monad
 import Data.Bits
 import Data.Word
 import Numeric (showHex)
@@ -53,6 +54,13 @@ import Control.Concurrent.Async
 
 import qualified System.FTDI as FTDI
 import System.FTDI (InterfaceHandle)
+
+debug :: Bool
+debug = False
+
+-- Useful for debugging
+showBS :: BS.ByteString -> String
+showBS = foldr (\n rest -> showHex n . showChar ' ' $ rest) "" . BS.unpack
 
 data Command a = Command { command :: BSB.Builder
                          , expectedBytes :: !Int
@@ -115,6 +123,7 @@ data Failure = WriteTimedOut Int
 run :: InterfaceHandle -> Command a -> IO (Either Failure a)
 run ifHnd (Command cmd n parse) = do
     let cmd' = BSL.toStrict $ BSB.toLazyByteString cmd
+    when debug $ putStrLn $ showBS cmd'
     writer <- async $ FTDI.writeBulk ifHnd cmd'
     (resp, _readStatus) <- FTDI.readBulk ifHnd n
     (written, _writeStatus) <- wait writer
