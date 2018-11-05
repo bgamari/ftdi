@@ -105,6 +105,7 @@ readN n = transfer mempty n
 
 data Failure = WriteTimedOut Int
              | InsufficientRead BS.ByteString
+             deriving (Show)
 
 -- | Assumes that the interface has already been placed in 'BitMode_MPSSE'
 -- using 'setBitMode'.
