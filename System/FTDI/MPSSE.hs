@@ -241,18 +241,20 @@ inEdgeBit Falling = 0x4
 
 writeBytes :: ClockEdge -> BitOrder -> BS.ByteString -> Command ()
 writeBytes edge order bs
-  | BS.length bs > 0xffff = error "writeBytes: too long"
+  | BS.null bs = error "writeBytes: too short"
+  | BS.length bs > 0x10000 = error "writeBytes: too long"
   | otherwise =
-    opCode o *> word16 (fromIntegral $ BS.length bs) *> writeByteString bs
+    opCode o *> word16 (fromIntegral $ BS.length bs - 1) *> writeByteString bs
   where
     o = 0x10 .|. bitOrderBit order .|. outEdgeBit edge
 {-# INLINE writeBytes #-}
 
-readBytes :: ClockEdge -> BitOrder -> Word16 -> Command BS.ByteString
+readBytes :: ClockEdge -> BitOrder -> Int -> Command BS.ByteString
 readBytes edge order n
-  | n > 0xffff = error "readBytes: too long"
+  | n == 0 = error "readBytes: too short"
+  | n > 0x10000 = error "readBytes: too long"
   | otherwise =
-    opCode o *> word16 n *> readN (fromIntegral n)
+    opCode o *> word16 (fromIntegral $ n - 1) *> readN (fromIntegral n)
   where
     o = 0x20 .|. bitOrderBit order .|. inEdgeBit edge
 {-# INLINE readBytes #-}
@@ -260,9 +262,10 @@ readBytes edge order n
 readWriteBytes :: ClockEdge  -- ^ which edge to clock *out* data on
                -> BitOrder -> BS.ByteString -> Command BS.ByteString
 readWriteBytes outEdge order bs
-  | BS.length bs > 0xffff = error "readWriteBytes: too long"
+  | BS.null bs = error "readWriteBytes: too short"
+  | BS.length bs > 0x10000 = error "readWriteBytes: too long"
   | otherwise =
-    opCode o *> word16 (fromIntegral $ BS.length bs) *> transfer (BSB.byteString bs) (BS.length bs)
+    opCode o *> word16 (fromIntegral $ BS.length bs - 1) *> transfer (BSB.byteString bs) (BS.length bs)
   where
     o = 0x30 .|. bitOrderBit order .|. inEdgeBit (otherEdge outEdge) .|. outEdgeBit outEdge
 {-# INLINE readWriteBytes #-}
