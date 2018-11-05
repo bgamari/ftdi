@@ -43,6 +43,7 @@ module System.FTDI.MPSSE
 
 import Data.Bits
 import Data.Word
+import Numeric (showHex)
 
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as BSL
@@ -104,7 +105,9 @@ readN n = transfer mempty n
 -------------------------------------------------------------------------------
 
 data Failure = WriteTimedOut Int
-             | InsufficientRead BS.ByteString
+               -- ^ number of bytes written
+             | InsufficientRead Int BS.ByteString
+               -- ^ expected bytes and data actually read.
              deriving (Show)
 
 -- | Assumes that the interface has already been placed in 'BitMode_MPSSE'
@@ -116,7 +119,7 @@ run ifHnd (Command cmd n parse) = do
     (resp, _readStatus) <- FTDI.readBulk ifHnd n
     (written, _writeStatus) <- wait writer
     if | written /= BS.length cmd' -> return $ Left $ WriteTimedOut written
-       | BS.length resp /= n -> return $ Left $ InsufficientRead resp
+       | BS.length resp /= n -> return $ Left $ InsufficientRead n resp
        | otherwise -> return $ Right $ parse resp
 {-# INLINE run #-}
 
