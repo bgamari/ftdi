@@ -3,6 +3,7 @@
 {-# LANGUAGE DeriveTraversable #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module System.FTDI.MPSSE
     ( Command
@@ -36,6 +37,7 @@ module System.FTDI.MPSSE
 
       -- * GPIO
     , Gpios(..)
+    , allInputs
     , Direction(..)
     , GpioBank(..)
     , setGpioDirValue
@@ -91,7 +93,7 @@ byte o = () <$ transfer (BSB.word8 o) 0
 {-# INLINE byte #-}
 
 word16 :: Word16 -> Command ()
-word16 o = () <$ transfer (BSB.word16BE o) 0
+word16 o = () <$ transfer (BSB.word16LE o) 0
 {-# INLINE word16 #-}
 
 transfer :: BSB.Builder -> Int -> Command BS.ByteString
@@ -116,6 +118,7 @@ data Failure = WriteTimedOut Int
                -- ^ number of bytes written
              | InsufficientRead Int BS.ByteString
                -- ^ expected bytes and data actually read.
+             | BadStatus BS.ByteString
              deriving (Show)
 
 -- | Assumes that the interface has already been placed in 'BitMode_MPSSE'
@@ -125,11 +128,21 @@ run ifHnd (Command cmd n parse) = do
     let cmd' = BSL.toStrict $ BSB.toLazyByteString cmd
     when debug $ putStrLn $ showBS cmd'
     writer <- async $ FTDI.writeBulk ifHnd cmd'
-    (resp, _readStatus) <- FTDI.readBulk ifHnd n
+    let readLoop = do
+          (resp, _readStatus) <- FTDI.readBulk ifHnd (n+2)
+          if | BS.length resp == n + 2   -> return $ Right $ parse $ BS.drop 2 resp
+             | BS.length resp == 2       -> print resp >> readLoop
+             | BS.length resp < 2        -> return $ Left $ InsufficientRead n resp
+             | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
+             | BS.length resp /= n + 2   -> return $ Left $ InsufficientRead n resp
+             -- | BS.take 2 resp /= "2`"    -> return $ Left $ BadStatus resp
+             | otherwise                 -> error "uhh"
+
+    resp <- readLoop
     (written, _writeStatus) <- wait writer
-    if | written /= BS.length cmd' -> return $ Left $ WriteTimedOut written
-       | BS.length resp /= n -> return $ Left $ InsufficientRead n resp
-       | otherwise -> return $ Right $ parse resp
+    if | written /= BS.length cmd'  -> return $ Left $ WriteTimedOut written
+       | otherwise                  -> return resp
+
 {-# INLINE run #-}
 
 -------------------------------------------------------------------------------
@@ -171,14 +184,24 @@ disableLoopback = opCode 0x85
 -- GPIO
 -------------------------------------------------------------------------------
 
-data Gpios a = Gpios { gpio0, gpio1, gpio2, gpio3
-                     , gpio4, gpio5, gpio6, gpio7 :: a
+data Gpios a = Gpios { gpio0 :: a  -- ^ BankL: TXD, clock
+                     , gpio1 :: a  -- ^ BankL: RXD, TDI, MOSI
+                     , gpio2 :: a  -- ^ BankL: RTS#, TDO, MISO
+                     , gpio3 :: a  -- ^ BankL: CTS#, TMS, CS
+                     , gpio4 :: a
+                     , gpio5 :: a
+                     , gpio6 :: a
+                     , gpio7 :: a
                      }
              deriving (Functor, Foldable, Traversable)
 
 data Direction i o = Input i | Output o
 
 data GpioBank = BankL | BankH
+
+allInputs :: Gpios (Direction () Bool)
+allInputs = Gpios i i i i i i i i
+  where i = Input ()
 
 gpioBits :: Gpios Bool -> Word8
 gpioBits Gpios{..} =
@@ -228,8 +251,8 @@ otherEdge Rising  = Falling
 otherEdge Falling = Rising
 
 bitOrderBit :: BitOrder -> Word8
-bitOrderBit LsbFirst = 0x0
-bitOrderBit MsbFirst = 0x8
+bitOrderBit MsbFirst = 0x0
+bitOrderBit LsbFirst = 0x8
 
 outEdgeBit :: ClockEdge -> Word8
 outEdgeBit Rising  = 0x0
@@ -254,7 +277,9 @@ readBytes edge order n
   | n == 0 = error "readBytes: too short"
   | n > 0x10000 = error "readBytes: too long"
   | otherwise =
-    opCode o *> word16 (fromIntegral $ n - 1) *> readN (fromIntegral n)
+    opCode o
+    *> word16 (fromIntegral $ n - 1)
+    *> readN (fromIntegral n)
   where
     o = 0x20 .|. bitOrderBit order .|. inEdgeBit edge
 {-# INLINE readBytes #-}
@@ -265,7 +290,9 @@ readWriteBytes outEdge order bs
   | BS.null bs = error "readWriteBytes: too short"
   | BS.length bs > 0x10000 = error "readWriteBytes: too long"
   | otherwise =
-    opCode o *> word16 (fromIntegral $ BS.length bs - 1) *> transfer (BSB.byteString bs) (BS.length bs)
+    opCode o
+    *> word16 (fromIntegral $ BS.length bs - 1)
+    *> transfer (BSB.byteString bs) (BS.length bs)
   where
     o = 0x30 .|. bitOrderBit order .|. inEdgeBit (otherEdge outEdge) .|. outEdgeBit outEdge
 {-# INLINE readWriteBytes #-}
