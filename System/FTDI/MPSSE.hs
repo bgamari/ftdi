@@ -126,19 +126,17 @@ data Failure = WriteTimedOut Int
 run :: InterfaceHandle -> Command a -> IO (Either Failure a)
 run ifHnd (Command cmd n parse) = do
     let cmd' = BSL.toStrict $ BSB.toLazyByteString cmd
-    when debug $ putStrLn $ showBS cmd'
+    when debug $ putStrLn $ "W " ++ showBS cmd'
     writer <- async $ FTDI.writeBulk ifHnd cmd'
-    let readLoop = do
+    let readLoop acc = do
           (resp, _readStatus) <- FTDI.readBulk ifHnd (n+2)
-          if | BS.length resp == n + 2   -> return $ Right $ parse $ BS.drop 2 resp
-             | BS.length resp == 2       -> print resp >> readLoop
-             | BS.length resp < 2        -> return $ Left $ InsufficientRead n resp
-             | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
-             | BS.length resp /= n + 2   -> return $ Left $ InsufficientRead n resp
-             -- | BS.take 2 resp /= "2`"    -> return $ Left $ BadStatus resp
-             | otherwise                 -> error "uhh"
+          when debug $ putStrLn $ "R " ++ showBS resp
+          let acc' = acc <> BS.drop 2 resp
+          if | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
+             | BS.length acc' == n       -> return $ Right $ parse acc'
+             | otherwise                 -> readLoop acc'
 
-    resp <- readLoop
+    resp <- readLoop mempty
     (written, _writeStatus) <- wait writer
     if | written /= BS.length cmd'  -> return $ Left $ WriteTimedOut written
        | otherwise                  -> return resp
