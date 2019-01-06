@@ -43,6 +43,7 @@ module System.FTDI.MPSSE
     , setGpioDirValue
     ) where
 
+import Control.Concurrent
 import Control.Monad
 import Data.Bits
 import Data.Word
@@ -118,6 +119,7 @@ data Failure = WriteTimedOut Int
                -- ^ number of bytes written
              | InsufficientRead Int BS.ByteString
                -- ^ expected bytes and data actually read.
+             | ReadTooLong Int BS.ByteString
              | BadStatus BS.ByteString
              deriving (Show)
 
@@ -126,15 +128,18 @@ data Failure = WriteTimedOut Int
 run :: InterfaceHandle -> Command a -> IO (Either Failure a)
 run ifHnd (Command cmd n parse) = do
     let cmd' = BSL.toStrict $ BSB.toLazyByteString cmd
-    when debug $ putStrLn $ "W " ++ showBS cmd'
+    when debug $ putStrLn $ "W: " ++ showBS cmd'
     writer <- async $ FTDI.writeBulk ifHnd cmd'
-    let readLoop acc = do
-          (resp, _readStatus) <- FTDI.readBulk ifHnd (n+2)
-          when debug $ putStrLn $ "R " ++ showBS resp
-          let acc' = acc <> BS.drop 2 resp
-          if | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
-             | BS.length acc' == n       -> return $ Right $ parse acc'
-             | otherwise                 -> readLoop acc'
+    let readLoop acc
+          | remain < 0  = return $ Left $ ReadTooLong n acc
+          | remain == 0 = return $ Right $ parse acc
+          | otherwise = do
+              (resp, _readStatus) <- FTDI.readBulk ifHnd (remain+2)
+              when debug $ putStrLn $ "R " ++ show (BS.length acc) ++ "/" ++ show n ++ ": " ++ showBS resp
+              let acc' = acc <> BS.drop 2 resp
+              if | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
+                 | otherwise                 -> readLoop acc'
+          where remain = n - BS.length acc
 
     resp <- readLoop mempty
     (written, _writeStatus) <- wait writer
