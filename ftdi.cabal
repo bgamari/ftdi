@@ -13,10 +13,12 @@ synopsis:      A thin layer over USB to communicate with FTDI chips
 description:
   This library enables you to communicate with FTDI devices. It is
   implemented as a lightweight wrapper around the usb library.
+tested-with: GHC==8.6.1, GHC==8.4.3, GHC==8.2.2, GHC==8.0.2, GHC==7.10.3
 
 source-repository head
   type:     git
   location: http://github.com/bgamari/ftdi2
+
 
 -------------------------------------------------------------------------------
 
