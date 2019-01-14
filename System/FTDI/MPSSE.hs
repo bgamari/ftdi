@@ -4,6 +4,7 @@
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE MultiWayIf #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 
 module System.FTDI.MPSSE
     ( Command
@@ -43,8 +44,6 @@ module System.FTDI.MPSSE
     , setGpioDirValue
     ) where
 
-import Control.Concurrent
-import Control.Monad
 import Data.Bits
 import Data.Word
 import Numeric (showHex)
@@ -57,9 +56,15 @@ import Control.Concurrent.Async
 
 import qualified System.FTDI as FTDI
 import System.FTDI (InterfaceHandle)
+import System.IO
 
 debug :: Bool
 debug = False
+
+debugLog :: String -> IO ()
+debugLog
+  | debug = hPutStrLn stderr
+  | otherwise = const $ return ()
 
 -- Useful for debugging
 showBS :: BS.ByteString -> String
@@ -115,35 +120,61 @@ readN n = transfer mempty n
 -- Interpreter
 -------------------------------------------------------------------------------
 
-data Failure = WriteTimedOut Int
-               -- ^ number of bytes written
-             | InsufficientRead Int BS.ByteString
-               -- ^ expected bytes and data actually read.
+data Failure = WriteTimedOut BS.ByteString Int
+               -- ^ content to be written and number of bytes actually written.
+             | ReadTimedOut BS.ByteString Int BS.ByteString
+               -- ^ data written, expected returned bytes, and data actually read.
              | ReadTooLong Int BS.ByteString
+               -- ^ bytes expected and content actually read.
              | BadStatus BS.ByteString
-             deriving (Show)
+
+instance Show Failure where
+    show (WriteTimedOut write written) =
+        unlines [ "Write timed out:"
+                , "  Wrote " <> show written <> " of " <> show (BS.length write) <> ": " <> showBS write
+                ]
+    show (ReadTimedOut written expected readBS) =
+        unlines [ "Read timed out:"
+                , "  Wrote" <> show (BS.length written) <> ": " <> showBS written
+                , "  Expected to read " <> show expected
+                , "  Actually read " <> show (BS.length readBS) <> ": " <> showBS readBS
+                ]
+    show (ReadTooLong expected readBS) =
+        unlines [ "Read too long:"
+                , "  Expected to read " <> show expected
+                , "  Actually read " <> show (BS.length readBS) <> ": " <> showBS readBS
+                ]
+    show (BadStatus status) =
+        unlines [ "Bad status"
+                , "  Status: " <> showBS status
+                ]
 
 -- | Assumes that the interface has already been placed in 'BitMode_MPSSE'
 -- using 'setBitMode'.
-run :: InterfaceHandle -> Command a -> IO (Either Failure a)
+run :: forall a. InterfaceHandle -> Command a -> IO (Either Failure a)
 run ifHnd (Command cmd n parse) = do
     let cmd' = BSL.toStrict $ BSB.toLazyByteString cmd
-    when debug $ putStrLn $ "W: " ++ showBS cmd'
+    debugLog $ "W ("++show n++"): " ++ showBS cmd'
     writer <- async $ FTDI.writeBulk ifHnd cmd'
-    let readLoop acc
+    link writer
+    let readLoop :: Int -> BS.ByteString -> IO (Either Failure a)
+        readLoop iters acc
           | remain < 0  = return $ Left $ ReadTooLong n acc
           | remain == 0 = return $ Right $ parse acc
           | otherwise = do
               (resp, _readStatus) <- FTDI.readBulk ifHnd (remain+2)
-              when debug $ putStrLn $ "R " ++ show (BS.length acc) ++ "/" ++ show n ++ ": " ++ showBS resp
+              debugLog $ "R " ++ show (BS.length acc) ++ "/" ++ show n ++ ": " ++ showBS resp
               let acc' = acc <> BS.drop 2 resp
+                  statusOnly = BS.length resp == 2
+                  iters' = if statusOnly then iters + 1 else iters
               if | BS.take 2 resp == "\xfa"  -> return $ Left $ BadStatus resp
-                 | otherwise                 -> readLoop acc'
+                 | iters == 10               -> return $ Left $ ReadTimedOut cmd' n acc
+                 | otherwise                 -> readLoop iters' acc'
           where remain = n - BS.length acc
 
-    resp <- readLoop mempty
+    resp <- readLoop 0 mempty
     (written, _writeStatus) <- wait writer
-    if | written /= BS.length cmd'  -> return $ Left $ WriteTimedOut written
+    if | written /= BS.length cmd'  -> return $ Left $ WriteTimedOut cmd' written
        | otherwise                  -> return resp
 
 {-# INLINE run #-}
