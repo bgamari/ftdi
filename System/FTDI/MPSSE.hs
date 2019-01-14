@@ -135,7 +135,7 @@ instance Show Failure where
                 ]
     show (ReadTimedOut written expected readBS) =
         unlines [ "Read timed out:"
-                , "  Wrote" <> show (BS.length written) <> ": " <> showBS written
+                , "  Wrote " <> show (BS.length written) <> ": " <> showBS written
                 , "  Expected to read " <> show expected
                 , "  Actually read " <> show (BS.length readBS) <> ": " <> showBS readBS
                 ]
